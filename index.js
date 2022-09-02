@@ -27,6 +27,7 @@ app.get('/participants', async function (req, res) {
         res.send(participants);
     } catch (error) {
         console.error(error);
+        res.sendStatus(500);
     }
 });
 
@@ -34,24 +35,23 @@ app.get('/messages', async function (req, res) {
     const { limit } = req.query;
     const { user } = req.headers;
 
+    const loggedIn = await db.collection('participants').find({name: `${user}`}).toArray();
+    if (loggedIn.length === 0) return res.status(422).send('Please login again');
+
     const messages = await db.collection('messages').find().toArray();
     const messagesUser = messages.filter(message => (message.from === user || message.to === 'Todos' || message.to === user));
 
-    try {
-        if (limit) {
-            res.send(messagesUser.slice(-limit));
-        } else {
-            res.send(messagesUser);
-        }
-    } catch (error) {
-        console.error(error);
+    if (limit) {
+        res.send(messagesUser.slice(-limit));
+    } else {
+        res.send(messagesUser);
     }
 });
 
 //Post participants and messages
 app.post('/participants', async function (req, res) {
-    const schema = Joi.string().min(1);
-    const { value, error } = schema.validate(req.body.name);
+    const schemaUsername = Joi.string().alphanum().required();
+    const { value, error } = schemaUsername.validate(req.body.name);
     const loggedIn = await db.collection('participants').find({name: `${value}`}).toArray();
 
     if (loggedIn.length !== 0) return res.status(409).send('Name already in use');
@@ -72,19 +72,28 @@ app.post('/participants', async function (req, res) {
         res.sendStatus(201);
     } catch (error) {
         console.error(error);
+        res.sendStatus(500);
     } 
 });
 
 app.post('/messages', async function (req, res) {
     const { to, text, type } = req.body;
     const { user } = req.headers;
-    
-    // const schema = Joi.string().min(1);
-    // const { value, error } = schema.validate(req.body.name);
-    // const loggedIn = await db.collection('messages').find({name: `${value}`}).toArray();
+    const schemaMessage = Joi.object ({
+        to: Joi.string().alphanum().required(),
+        text: Joi.string().required(),
+        type: Joi.string().required().valid('message', 'private_message')
+    });
 
-    // if (loggedIn.length !== 0) return res.status(409).send('Name already in use');
-    // if (error) return res.status(422).send(error.details[0].message);
+    const loggedIn = await db.collection('participants').find({name: `${user}`}).toArray();
+    if (loggedIn.length === 0) return res.status(422).send('Please login again');
+
+    const { value, error } = schemaMessage.validate({
+        to: to,
+        text: text,
+        type: type,
+    });
+    if (error) return res.status(422).send(error.details[0].message);
 
     try {
         db.collection('messages').insertOne({
@@ -97,6 +106,7 @@ app.post('/messages', async function (req, res) {
         res.sendStatus(201);
     } catch (error) {
         console.error(error);
+        res.sendStatus(500);
     } 
 });
 
@@ -107,11 +117,16 @@ app.post('/status', async function (req, res) {
     if (!user) {
         res.sendStatus(404);
     } else {
-        db.collection('participants').updateOne(
-            {name: user},
-            {$set: {lastStatus: Date.now()}}
-        );
-        res.sendStatus(200);
+        try {
+            db.collection('participants').updateOne(
+                {name: user},
+                {$set: {lastStatus: Date.now()}}
+            );
+            res.sendStatus(200);
+        } catch (error) {
+            console.error(error);
+            res.sendStatus(500);
+        }
     }
 });
 
