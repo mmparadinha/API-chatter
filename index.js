@@ -31,9 +31,18 @@ app.get('/participants', async function (req, res) {
 });
 
 app.get('/messages', async function (req, res) {
+    const { limit } = req.query;
+    const { user } = req.headers;
+
+    const messages = await db.collection('messages').find().toArray();
+    const messagesUser = messages.filter(message => (message.from === user || message.to === 'Todos' || message.to === user));
+
     try {
-        const messages = await db.collection('messages').find().toArray();
-        res.send(messages);
+        if (limit) {
+            res.send(messagesUser.slice(-limit));
+        } else {
+            res.send(messagesUser);
+        }
     } catch (error) {
         console.error(error);
     }
@@ -66,7 +75,44 @@ app.post('/participants', async function (req, res) {
     } 
 });
 
+app.post('/messages', async function (req, res) {
+    const { to, text, type } = req.body;
+    const { user } = req.headers;
+    
+    // const schema = Joi.string().min(1);
+    // const { value, error } = schema.validate(req.body.name);
+    // const loggedIn = await db.collection('messages').find({name: `${value}`}).toArray();
 
+    // if (loggedIn.length !== 0) return res.status(409).send('Name already in use');
+    // if (error) return res.status(422).send(error.details[0].message);
 
+    try {
+        db.collection('messages').insertOne({
+            from: user,
+            to: to,
+            text: text,
+            type: type,
+            time: dayjs().format('HH:mm:ss')
+        });
+        res.sendStatus(201);
+    } catch (error) {
+        console.error(error);
+    } 
+});
+
+//Status
+app.post('/status', async function (req, res) {
+    const { user } = req.headers;
+
+    if (!user) {
+        res.sendStatus(404);
+    } else {
+        db.collection('participants').updateOne(
+            {name: user},
+            {$set: {lastStatus: Date.now()}}
+        );
+        res.sendStatus(200);
+    }
+});
 
 app.listen(5000, console.log('Listening at 5000!'));
