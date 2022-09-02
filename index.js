@@ -110,7 +110,7 @@ app.post('/messages', async function (req, res) {
     } 
 });
 
-//Status
+//Status and activity
 app.post('/status', async function (req, res) {
     const { user } = req.headers;
 
@@ -129,5 +129,26 @@ app.post('/status', async function (req, res) {
         }
     }
 });
+
+async function isActive() {
+    console.log('conferindo os ativos')
+    const participants = await db.collection('participants').find().toArray();
+
+    participants.forEach(participant => {
+        const timeNow = Date.now();
+        if (timeNow - participant.lastStatus > 9999) {
+            db.collection('participants').deleteOne(participant);
+            db.collection('messages').insertOne({
+                from: participant.name,
+                to: 'Todos',
+                text: 'sai da sala...',
+                type: 'status',
+                time: dayjs().format('HH:mm:ss')
+            });
+        }
+    });
+}
+
+setInterval(isActive, 15000);
 
 app.listen(5000, console.log('Listening at 5000!'));
