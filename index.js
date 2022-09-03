@@ -1,9 +1,10 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import { MongoClient } from 'mongodb';
+import { MongoClient, ObjectId } from 'mongodb';
 import dayjs from 'dayjs';
 import Joi from 'joi';
+import { stripHtml } from "string-strip-html";
 
 const app = express();
 app.use(cors());
@@ -50,20 +51,21 @@ app.get('/messages', async function (req, res) {
 
 //Post participants and messages
 app.post('/participants', async function (req, res) {
+    const name = stripHtml(req.body.name).result.trim();
     const schemaUsername = Joi.string().alphanum().required();
-    const { value, error } = schemaUsername.validate(req.body.name);
-    const loggedIn = await db.collection('participants').find({name: `${value}`}).toArray();
+    const { error } = schemaUsername.validate(name);
+    const loggedIn = await db.collection('participants').find({name: `${name}`}).toArray();
 
     if (loggedIn.length !== 0) return res.status(409).send('Name already in use');
     if (error) return res.status(422).send(error.details[0].message);
 
     try {
         db.collection('participants').insertOne({
-            name: value,
+            name: name,
             lastStatus: Date.now()
         })
         db.collection('messages').insertOne({
-            from: value,
+            from: name,
             to: 'Todos',
             text: 'entra na sala...',
             type: 'status',
@@ -77,7 +79,8 @@ app.post('/participants', async function (req, res) {
 });
 
 app.post('/messages', async function (req, res) {
-    const { to, text, type } = req.body;
+    const { to, type } = req.body;
+    const text = stripHtml(req.body.text).result.trim();
     const { user } = req.headers;
     const schemaMessage = Joi.object ({
         to: Joi.string().alphanum().required(),
@@ -88,7 +91,7 @@ app.post('/messages', async function (req, res) {
     const loggedIn = await db.collection('participants').find({name: `${user}`}).toArray();
     if (loggedIn.length === 0) return res.status(422).send('Please login again');
 
-    const { value, error } = schemaMessage.validate({
+    const { error } = schemaMessage.validate({
         to: to,
         text: text,
         type: type,
@@ -110,9 +113,27 @@ app.post('/messages', async function (req, res) {
     } 
 });
 
-//Status and activity
-app.post('/status', async function (req, res) {
+//Delete messages
+app.delete('/messages/:messageId', async (req, res) => {
     const { user } = req.headers;
+    const { messageId } = req.params;
+
+    const message = await db.collection('messages').findOne({ _id: ObjectId(messageId) });
+    if (!message) return res.sendStatus(404);
+    if (user !== message.from) return res.sendStatus(401);
+    
+    try {
+        db.collection('messages').deleteMany(message);
+        res.sendStatus(200);
+    } catch (error) {
+        console.error(error);
+        res.sendStatus(500);
+    }
+});
+
+//Participants status and activity
+app.post('/status', async function (req, res) {
+    const { user } = stripHtml(req.headers).result.trim();
 
     if (!user) {
         res.sendStatus(404);
@@ -149,6 +170,6 @@ async function isActive() {
     });
 }
 
-setInterval(isActive, 15000);
+//setInterval(isActive, 15000);
 
 app.listen(5000, console.log('Listening at 5000!'));
