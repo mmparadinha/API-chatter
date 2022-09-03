@@ -20,7 +20,6 @@ mongoClient.connect().then(() => {
     db = mongoClient.db("projeto12");
 });
 
-
 //Get participants and messages
 app.get('/participants', async function (req, res) {
     try {
@@ -89,7 +88,7 @@ app.post('/messages', async function (req, res) {
     });
 
     const loggedIn = await db.collection('participants').find({name: `${user}`}).toArray();
-    if (loggedIn.length === 0) return res.status(422).send('Please login again');
+    if (loggedIn.length === 0) return res.status(422).send('You are not online, please login again!');
 
     const { error } = schemaMessage.validate({
         to: to,
@@ -113,7 +112,7 @@ app.post('/messages', async function (req, res) {
     } 
 });
 
-//Delete messages
+//Delete message
 app.delete('/messages/:messageId', async (req, res) => {
     const { user } = req.headers;
     const { messageId } = req.params;
@@ -123,12 +122,54 @@ app.delete('/messages/:messageId', async (req, res) => {
     if (user !== message.from) return res.sendStatus(401);
     
     try {
-        db.collection('messages').deleteMany(message);
+        db.collection('messages').deleteOne(message);
         res.sendStatus(200);
     } catch (error) {
         console.error(error);
         res.sendStatus(500);
     }
+});
+
+//Modify message
+app.put('/messages/:messageId', async function (req, res) {
+    const { to, type } = req.body;
+    const text = stripHtml(req.body.text).result.trim();
+    const { user } = req.headers;
+    const { messageId } = req.params;
+    const schemaMessage = Joi.object ({
+        to: Joi.string().alphanum().required(),
+        text: Joi.string().required(),
+        type: Joi.string().required().valid('message', 'private_message')
+    });
+
+    const loggedIn = await db.collection('participants').find({name: `${user}`}).toArray();
+    if (loggedIn.length === 0) return res.status(422).send('You are not online, please login again!');
+
+    const message = await db.collection('messages').findOne({ _id: ObjectId(messageId) });
+    if (!message) return res.sendStatus(404);
+    if (user !== message.from) return res.sendStatus(401);
+
+    const { error } = schemaMessage.validate({
+        to: to,
+        text: text,
+        type: type,
+    });
+    if (error) return res.status(422).send(error.details[0].message);
+
+    try {
+        db.collection('messages').updateOne(
+            { _id: ObjectId(messageId) },
+            {$set: {
+                to: to,
+                text: text,
+                type: type
+            }},
+        );
+        res.sendStatus(201);
+    } catch (error) {
+        console.error(error);
+        res.sendStatus(500);
+    } 
 });
 
 //Participants status and activity
