@@ -20,10 +20,81 @@ mongoClient.connect().then(() => {
     db = mongoClient.db("projeto12");
 });
 
+//Database interactions
+async function findAllUsers() {
+    return db.collection('participants').find().toArray();
+}
+
+async function findUserByName(username) {
+    return db.collection('participants').find({name: `${username}`}).toArray();
+}
+
+async function findMessages(username) {
+    return db.collection('messages').find({
+        $or: [
+            {from: username},
+            {to: {$in: ['Todos', username]} }
+        ]
+    }).toArray();
+}
+
+async function logInMessage(username) {
+    return db.collection('messages').insertOne({
+        from: username,
+        to: 'Todos',
+        text: 'entra na sala...',
+        type: 'status',
+        time: dayjs().format('HH:mm:ss')
+    });
+}
+
+async function logOffMessage(username) {
+    return db.collection('messages').insertOne({
+        from: username,
+        to: 'Todos',
+        text: 'sai da sala...',
+        type: 'status',
+        time: dayjs().format('HH:mm:ss')
+    });
+}
+
+async function logInUser(username) {
+    return db.collection('participants').insertOne({
+        name: username,
+        lastStatus: Date.now()
+    });
+}
+
+async function logOffUser(user) {
+    return db.collection('participants').deleteOne(user);
+}
+
+async function insertMessage(username, to, text, type) {
+    return db.collection('messages').insertOne({
+        from: username,
+        to: to,
+        text: text,
+        type: type,
+        time: dayjs().format('HH:mm:ss')
+    });
+}
+
+async function findMessageById(messageId) {
+    return db.collection('messages').findOne({ _id: ObjectId(messageId) });
+}
+
+async function updateMessage(messageId, text) {
+    return db.collection('messages').updateOne(
+        { _id: ObjectId(messageId) },
+        {$set: {text: text}},
+    );
+}
+
 //Get participants and messages
 app.get('/participants', async function (req, res) {
+    const participants = await findAllUsers();
+
     try {
-        const participants = await db.collection('participants').find().toArray();
         res.send(participants);
     } catch (error) {
         console.error(error);
@@ -35,41 +106,30 @@ app.get('/messages', async function (req, res) {
     const { limit } = req.query;
     const { user } = req.headers;
 
-    const loggedIn = await db.collection('participants').find({name: `${user}`}).toArray();
-    if (loggedIn.length === 0) return res.status(422).send('Please login again');
+    const loggedIn = await findUserByName(user);
+    if (loggedIn.length === 0) {return res.status(422).send('Please login again')};
 
-    const messages = await db.collection('messages').find().toArray();
-    const messagesUser = messages.filter(message => (message.from === user || message.to === 'Todos' || message.to === user));
-
-    if (limit) {
-        res.send(messagesUser.slice(-limit));
-    } else {
-        res.send(messagesUser);
-    }
+    const messages = await findMessages(user);
+    res.send(messages.slice(-limit));
 });
 
 //Post participants and messages
 app.post('/participants', async function (req, res) {
-    const name = stripHtml(req.body.name).result.trim();
-    const schemaUsername = Joi.string().alphanum().required();
-    const { error } = schemaUsername.validate(name);
-    const loggedIn = await db.collection('participants').find({name: `${name}`}).toArray();
+    let { name } = req.body;
+    const schemaUsername = Joi.string().required();
 
-    if (loggedIn.length !== 0) return res.status(409).send('Name already in use');
-    if (error) return res.status(422).send(error.details[0].message);
+    if (typeof name !== 'string') {return res.sendStatus(400)};
+    name = stripHtml(name).result.trim();
+
+    const loggedIn = await findUserByName(name);
+    if (loggedIn.length !== 0) {return res.status(409).send('Name already in use')};
+
+    const { error } = schemaUsername.validate(name);
+    if (error) {return res.status(422).send(error.details[0].message)};
 
     try {
-        db.collection('participants').insertOne({
-            name: name,
-            lastStatus: Date.now()
-        })
-        db.collection('messages').insertOne({
-            from: name,
-            to: 'Todos',
-            text: 'entra na sala...',
-            type: 'status',
-            time: dayjs().format('HH:mm:ss')
-        })
+        await logInUser(name);
+        await logInMessage(name);
         res.sendStatus(201);
     } catch (error) {
         console.error(error);
@@ -79,7 +139,7 @@ app.post('/participants', async function (req, res) {
 
 app.post('/messages', async function (req, res) {
     const { to, type } = req.body;
-    const text = stripHtml(req.body.text).result.trim();
+    let { text } = req.body;
     const { user } = req.headers;
     const schemaMessage = Joi.object ({
         to: Joi.string().alphanum().required(),
@@ -87,24 +147,21 @@ app.post('/messages', async function (req, res) {
         type: Joi.string().required().valid('message', 'private_message')
     });
 
-    const loggedIn = await db.collection('participants').find({name: `${user}`}).toArray();
-    if (loggedIn.length === 0) return res.status(422).send('You are not online, please login again!');
+    if (typeof text !== 'string') {return res.sendStatus(400)};
+    text = stripHtml(text).result.trim();
+
+    const loggedIn = await findUserByName(user);
+    if (loggedIn.length === 0) {return res.status(422).send('You are not online, please login again!')};
 
     const { error } = schemaMessage.validate({
         to: to,
         text: text,
         type: type,
     });
-    if (error) return res.status(422).send(error.details[0].message);
+    if (error) {return res.status(422).send(error.details[0].message)};
 
     try {
-        db.collection('messages').insertOne({
-            from: user,
-            to: to,
-            text: text,
-            type: type,
-            time: dayjs().format('HH:mm:ss')
-        });
+        await insertMessage();
         res.sendStatus(201);
     } catch (error) {
         console.error(error);
@@ -117,12 +174,12 @@ app.delete('/messages/:messageId', async (req, res) => {
     const { user } = req.headers;
     const { messageId } = req.params;
 
-    const message = await db.collection('messages').findOne({ _id: ObjectId(messageId) });
-    if (!message) return res.sendStatus(404);
-    if (user !== message.from) return res.sendStatus(401);
+    const message = await findMessageById(messageId);
+    if (!message) {return res.sendStatus(404)};
+    if (user !== message.from) {return res.sendStatus(401)};
     
     try {
-        db.collection('messages').deleteOne(message);
+        await db.collection('messages').deleteOne(message);
         res.sendStatus(200);
     } catch (error) {
         console.error(error);
@@ -132,85 +189,59 @@ app.delete('/messages/:messageId', async (req, res) => {
 
 //Modify message
 app.put('/messages/:messageId', async function (req, res) {
-    const { to, type } = req.body;
-    const text = stripHtml(req.body.text).result.trim();
+    let { text } = req.body;
     const { user } = req.headers;
     const { messageId } = req.params;
-    const schemaMessage = Joi.object ({
-        to: Joi.string().alphanum().required(),
-        text: Joi.string().required(),
-        type: Joi.string().required().valid('message', 'private_message')
-    });
+    const schemaMessage = Joi.string().required();
 
-    const loggedIn = await db.collection('participants').find({name: `${user}`}).toArray();
-    if (loggedIn.length === 0) return res.status(422).send('You are not online, please login again!');
+    if (typeof text !== 'string') {return res.sendStatus(400)};
+    text = stripHtml(text).result.trim();
 
-    const message = await db.collection('messages').findOne({ _id: ObjectId(messageId) });
-    if (!message) return res.sendStatus(404);
-    if (user !== message.from) return res.sendStatus(401);
+    const loggedIn = await findUserByName(user);
+    if (loggedIn.length === 0) {return res.status(422).send('You are not online, please login again!')};
 
-    const { error } = schemaMessage.validate({
-        to: to,
-        text: text,
-        type: type,
-    });
-    if (error) return res.status(422).send(error.details[0].message);
+    const message = await findMessageById(messageId);
+    if (!message) {return res.sendStatus(404)};
+    if (user !== message.from) {return res.sendStatus(401)};
+
+    const { error } = schemaMessage.validate(text);
+    if (error) {return res.status(422).send(error.details[0].message)};
 
     try {
-        db.collection('messages').updateOne(
-            { _id: ObjectId(messageId) },
-            {$set: {
-                to: to,
-                text: text,
-                type: type
-            }},
-        );
+        await updateMessage(messageId, text);
         res.sendStatus(201);
     } catch (error) {
         console.error(error);
         res.sendStatus(500);
-    } 
+    }
 });
 
 //Participants status and activity
 app.post('/status', async function (req, res) {
-    const { user } = stripHtml(req.headers).result.trim();
+    const { user } = req.headers;
+    if (!user) {return res.sendStatus(404)};
 
-    if (!user) {
-        res.sendStatus(404);
-    } else {
-        try {
-            db.collection('participants').updateOne(
-                {name: user},
-                {$set: {lastStatus: Date.now()}}
-            );
-            res.sendStatus(200);
-        } catch (error) {
-            console.error(error);
-            res.sendStatus(500);
-        }
+    try {
+        await db.collection('participants').updateOne( {name: user}, {$set: {lastStatus: Date.now()}});
+        res.sendStatus(200);
+    } catch (error) {
+        console.error(error);
+        res.sendStatus(500);
     }
 });
 
 async function isActive() {
-    console.log('conferindo os ativos')
-    const participants = await db.collection('participants').find().toArray();
+    const participants = await findAllUsers();
 
     participants.forEach(participant => {
         const timeNow = Date.now();
-        if (timeNow - participant.lastStatus > 9999) {
-            db.collection('participants').deleteOne(participant);
-            db.collection('messages').insertOne({
-                from: participant.name,
-                to: 'Todos',
-                text: 'sai da sala...',
-                type: 'status',
-                time: dayjs().format('HH:mm:ss')
-            });
+        if (timeNow - participant.lastStatus > 10000) {
+            logOffUser(participant);
+            logOffMessage(participant.name);
         }
     });
 }
 
-//setInterval(isActive, 15000);
+setInterval(isActive, 15000);
 
 app.listen(5000, console.log('Listening at 5000!'));
