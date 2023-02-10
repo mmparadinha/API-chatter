@@ -19,4 +19,4 @@ ___
 ___
 ## How to run
 
-In maintenence
+In maintenance
